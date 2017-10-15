@@ -1,0 +1,334 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset = "utf-8" />
+  <title>Sky</title>
+  <meta name = "viewport" content = "width=device-width">
+  <style>
+
+    body {
+      background-color: #eee;
+    }
+
+    .container {
+      margin: 0 auto;
+      text-align: center;
+      display: flex;
+      align-content: space-between;
+      flex-flow: row wrap;
+    }
+
+    .gauge {
+      width: 200px;
+      height: 200px;
+      margin: 0 auto;
+    }
+
+    .box {
+      background-color: #fff;
+      margin: 5px auto;
+      text-align: center;
+      width: 250px;
+      box-shadow: 0 0 3px #ccc;
+    }
+
+    h1 {
+      color: #777;
+      font-family: Helvetica, Arial, san-serif;
+    }
+
+    a: link.button,
+    a: active.button,
+    a: visited.button,
+    a: hover.button {
+      margin: 30px 5px 0 2px;
+      padding: 7px 13px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <div class="box">
+      <h1>DHT</h1>
+      <div id="dhtGaugeTemperature" class="gauge"></div>
+      <div id="dhtGaugeHumidity" class="gauge"></div>
+    </div>
+    <div class="box">
+      <h1>MLX</h1>
+      <div id="mlxGaugeTemperature" class="gauge"></div>
+      <div id="mlxGaugeTemperatureIR" class="gauge"></div>
+    </div>
+    <div class="box">
+      <h1>BMP</h1>
+      <div id="bmpGaugeTemperature" class="gauge"></div>
+      <div id="bmpGaugePressure" class="gauge"></div>
+      <div id="bmpGaugeAltitude" class="gauge"></div>
+    </div>
+    <div class="box">
+      <h1>Light</h1>
+      <div id="LightGauge" class="gauge"></div>
+    </div>
+    <div class="box">
+      <h1>Cloud</h1>
+      <div id="CloudGauge" class="gauge"></div>
+    </div>
+  </div>
+  <script src="raphael-2.1.4.min.js"> </script>
+  <script src="justgage.js"> </script>
+  <script type="text/javascript">
+      var dhtTemp;
+      var dhtHumidity;
+      var mlxTemp;
+      var mlxTempIR;
+      var bmpTemp;
+      var bmpPressure;
+      var bmpAltitude;
+      var light;
+      var cloud;
+
+      var TskyAfterCorrection;
+
+      //https://indiduino.wordpress.com/2013/02/02/meteostation/
+      const K1 = 33;
+      const K2 = 0;
+      const K3 = 4;
+      const K4 = 100;
+      const K5 = 100;
+      const Threshold = 30;
+
+      const CLOUD_TEMP_CLEAR = -8;
+      const CLOUD_TEMP_OVERCAST = 0;
+
+
+      function CloudPercentage() {
+        TskyAfterCorrection = Tsky();
+        return TskyAfterCorrection;
+      }
+
+      var Analog0 = new Array(); // create the arrays for the analog readings here.
+      var Analog1 = new Array(); // create the arrays for the analog readings here.
+
+      document.addEventListener("DOMContentLoaded", function(event) {
+        console.log("DOM fully loaded and parsed");
+        dhtTemp = new JustGage({
+          id: "dhtGaugeTemperature",
+          value: 0,
+          min: -30,
+          max: 100,
+          counter: true,
+          title: "Temperature",
+          titlePosition: "below",
+          label: '°C'
+        });
+
+        dhtHumidity = new JustGage({
+          id: "dhtGaugeHumidity",
+          value: 0,
+          min: 0,
+          max: 100,
+          counter: true,
+          title: "Humidity",
+          titlePosition: "below",
+          label: '%'
+        });
+
+        mlxTemp = new JustGage({
+          id: "mlxGaugeTemperature",
+          value: 0,
+          min: -30,
+          max: 100,
+          title: "Ambient Temperature",
+          titlePosition: "below",
+          label: '°C'
+        });
+
+        mlxTempIR = new JustGage({
+          id: "mlxGaugeTemperatureIR",
+          value: 0,
+          min: -50,
+          max: 100,
+          title: "IR Temperature",
+          titlePosition: "below",
+          label: '°C'
+        });
+
+        bmpTemp = new JustGage({
+          id: "bmpGaugeTemperature",
+          value: 0,
+          min: -30,
+          max: 100,
+          title: "Temperature",
+          titlePosition: "below",
+          label: '°C'
+        });
+
+        bmpPressure = new JustGage({
+          id: "bmpGaugePressure",
+          value: 0,
+          min: 0,
+          max: 200000,
+          title: "Pressure",
+          titlePosition: "below",
+          label: 'Pa'
+        });
+
+        bmpAltitude = new JustGage({
+          id: "bmpGaugeAltitude",
+          value: 0,
+          min: 0,
+          max: 10000,
+          title: "Altitude",
+          titlePosition: "below",
+          label: 'Meters'
+        });
+
+        light = new JustGage({
+          id: "LightGauge",
+          value: 0,
+          min: 0,
+          max: 1024,
+          title: "Light",
+          titlePosition: "below",
+          label: '-'
+        });
+
+        cloud = new JustGage({
+          id: "CloudGauge",
+          value: 0,
+          min: 0,
+          max: -10,
+          title: "Cloud"
+        });
+      });
+
+      var connection = new WebSocket('ws://' + location.hostname + ':81/', ['arduino']);
+      connection.onopen = function () {
+        connection.send('GET_TEMP');
+      };
+      console.log("connection opened");
+      connection.onerror = function (error) {
+        console.log('WebSocket Error ', error);
+      };
+
+connection.onmessage = function(evt)
+{
+  // handle websocket message. update attributes or values of elements that match the name on incoming message
+  console.log("msg rec", evt.data);
+  var msgArray = evt.data.split(","); // split message by delimiter into a string array
+  console.log("msgArray", msgArray[0]);
+  console.log("msgArray", msgArray[1]);
+  console.log("msgArray", msgArray[2]);
+  console.log("msgArray", msgArray[3]);
+  var indicator = msgArray[1]; // the first element in the message array is the ID of the object to update
+  console.log("indicator", indicator);
+  if (indicator) // if an object by the name of the message exists, update its value or its attributes
+  {
+    switch (msgArray[0])
+    {
+      case "dht": // DHT humidity sensor
+        switch (msgArray[1])
+        {
+          case "Temperature":
+            var A0 = (msgArray[2]);
+            dhtTemp.refresh(A0, null);
+
+            var x = Analog0.length;
+            if (x <101)
+            {
+              Analog0[x] = A0;
+            }
+            else
+            {
+              Analog0.shift();
+              x = Analog0.length;
+              Analog0[x] = A0;
+            }
+            break;
+          case "Humidity":
+            var A1 = (msgArray[2]);
+            dhtHumidity.refresh(A1, null);
+
+            var x = Analog1.length;
+            if (x <101)
+            {
+              Analog1[x] = A1;
+            }
+            else
+            {
+              Analog1.shift();
+              x = Analog1.length;
+              Analog1[x] = A1;
+            }
+            break;
+          default:
+            break;
+        } // switch
+
+      case "mlx":
+        switch (msgArray[1])
+        {
+          case "Ambient":
+            var temp = (msgArray[2]);
+            mlxTemp.refresh(temp, null);
+            break;
+          case "Object":
+            var temp = (msgArray[2]);
+            mlxTempIR.refresh(temp, null);
+            break;
+          default:
+            break;
+        }
+
+      case "bmp":
+        switch (msgArray[1])
+        {
+          case "Temperature":
+            var temp = (msgArray[2]);
+            bmpTemp.refresh(temp, null);
+            break;
+          case "Pressure":
+            var temp = (msgArray[2]);
+            bmpPressure.refresh(temp, null);
+            break;
+          case "Altitude":
+            var temp = (msgArray[2]);
+            bmpAltitude.refresh(temp, null);
+            break;
+          default:
+            break;
+        }
+
+      case "light":
+        switch (msgArray[1])
+        {
+          case "Light":
+            var temp = (msgArray[2]);
+            light.refresh(temp, null);
+            break;
+          default:
+            break;
+        }
+
+      case "sky":
+        switch (msgArray[1])
+        {
+          case "Sky":
+            var temp = (msgArray[2]);
+            cloud.refresh(temp, null);
+            break;
+          default:
+            break;
+        }
+
+      default:
+        break;
+    }
+  } // if (indicator)
+} // connection.onmessage
+;
+
+    </script>
+  </body>
+</html>
